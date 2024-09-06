@@ -6,8 +6,10 @@ from matmuls.matmul_grouped import matmul as matmul_grouped
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
+
 def matmul_torch(a, b):
     return torch.matmul(a, b)
+
 
 @pytest.mark.parametrize("M, N, K", [(128, 128, 128), (256, 256, 256), (512, 512, 512)])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float32, torch.bfloat16])

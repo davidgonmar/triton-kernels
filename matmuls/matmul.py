@@ -107,6 +107,7 @@ def matmul_naive_kernel(
     b_stride_n,
     c_stride_m,
     c_stride_n,
+    allow_tf32,
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
@@ -131,7 +132,7 @@ def matmul_naive_kernel(
         mask_k = offs_k + kk < k
         a_frag = tl.load(a_ptr, mask=a_mask_m & mask_k[None, :], other=0)
         b_frag = tl.load(b_ptr, mask=mask_k[:, None] & b_mask_n, other=0)
-        acc = tl.dot(a_frag, b_frag, acc)
+        acc += tl.dot(a_frag, b_frag, input_precision="ieee")
 
         a_ptr += BLOCK_SIZE_K * a_stride_k
         b_ptr += BLOCK_SIZE_K * b_stride_k
@@ -148,7 +149,7 @@ def matmul_naive_kernel(
     )
 
 
-def matmul(a: torch.Tensor, b: torch.Tensor):
+def matmul(a: torch.Tensor, b: torch.Tensor, allow_tf32: bool = True):
     assert a.dim() == 2
     assert b.dim() == 2
     assert a.size(1) == b.size(0)
@@ -174,5 +175,18 @@ def matmul(a: torch.Tensor, b: torch.Tensor):
         b.stride(1),
         c.stride(0),
         c.stride(1),
+        allow_tf32,
     )
     return c
+
+
+if __name__ == "__main__":
+    M, N, K = 1024, 1024, 1024
+    A = torch.randn((M, K), device="cuda", dtype=torch.float32)
+    B = torch.randn((K, N), device="cuda", dtype=torch.float32)
+
+    C = matmul(A, B, allow_tf32=False)
+
+    Ctorch = torch.matmul(A, B)
+
+    torch.testing.assert_allclose(C, Ctorch, rtol=1e-4, atol=1e-4)

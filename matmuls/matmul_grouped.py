@@ -2,6 +2,7 @@ import triton
 import triton.language as tl
 import torch
 
+
 def get_autotune_config():
     return [
         triton.Config(
@@ -260,3 +261,18 @@ def matmul(a: torch.Tensor, b: torch.Tensor):
         c.stride(1),
     )
     return c
+
+
+if __name__ == "__main__":
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
+    M, N, K = 1024, 1024, 1024
+    A = torch.randn((M, K), device="cuda", dtype=torch.float32)
+    B = torch.randn((K, N), device="cuda", dtype=torch.float32)
+
+    C = matmul(A, B)
+
+    Ctorch = torch.matmul(A, B)
+
+    torch.testing.assert_allclose(C, Ctorch, rtol=1e-4, atol=1e-4)

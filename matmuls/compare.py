@@ -15,9 +15,7 @@ def matmul_torch(a, b):
 configs = [
     triton.testing.Benchmark(
         x_names=["M", "N", "K"],
-        x_vals=[
-            128 * i for i in range(2, 33)
-        ],
+        x_vals=[128 * i for i in range(2, 33)],
         line_arg="provider",
         line_vals=[
             "triton_grouped",
