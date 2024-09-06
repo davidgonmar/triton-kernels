@@ -1,9 +1,98 @@
 import triton
 import triton.language as tl
 import torch
-import math
 
 
+def get_autotune_config():
+    return [
+        triton.Config(
+            {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64},
+            num_stages=3,
+            num_warps=8,
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 64, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 32},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 32},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 64, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 32},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 32, "BLOCK_SIZE_K": 32},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 64, "BLOCK_SIZE_N": 32, "BLOCK_SIZE_K": 32},
+            num_stages=5,
+            num_warps=2,
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 32, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32},
+            num_stages=5,
+            num_warps=2,
+        ),
+        # Good config for fp8 inputs.
+        triton.Config(
+            {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 128},
+            num_stages=3,
+            num_warps=8,
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 256, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 128},
+            num_stages=3,
+            num_warps=8,
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 256, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 128},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 64, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 128},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 128},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 64},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 64, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 64},
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 32, "BLOCK_SIZE_K": 64},
+            num_stages=4,
+            num_warps=4,
+        ),
+    ]
+
+
+@triton.autotune(
+    configs=get_autotune_config(),
+    key=["m", "n", "k"],
+)
 @triton.jit
 def matmul_naive_kernel(
     a_ptr,
@@ -59,20 +148,19 @@ def matmul_naive_kernel(
     )
 
 
-def matmul_naive(a: torch.Tensor, b: torch.Tensor):
+def matmul(a: torch.Tensor, b: torch.Tensor):
     assert a.dim() == 2
     assert b.dim() == 2
     assert a.size(1) == b.size(0)
+    assert a.dtype == b.dtype
 
     m, k = a.shape
     k, n = b.shape
 
-    c = torch.zeros((m, n), dtype=torch.float32, device="cuda")
-
-    BLOCK_SIZE_M = 32
-    BLOCK_SIZE_K = 32
-    BLOCK_SIZE_N = 32
-    grid = ((math.ceil(m / BLOCK_SIZE_M) + 1) * (math.ceil(n / BLOCK_SIZE_N) + 1),)
+    c = torch.empty((m, n), device="cuda", dtype=a.dtype)
+    grid = lambda META: (
+        triton.cdiv(m, META["BLOCK_SIZE_M"]) * triton.cdiv(n, META["BLOCK_SIZE_N"]),
+    )
     matmul_naive_kernel[grid](
         a.contiguous(),
         b.contiguous(),
@@ -86,18 +174,5 @@ def matmul_naive(a: torch.Tensor, b: torch.Tensor):
         b.stride(1),
         c.stride(0),
         c.stride(1),
-        BLOCK_SIZE_M,
-        BLOCK_SIZE_K,
-        BLOCK_SIZE_N,
     )
     return c
-
-
-a = torch.rand((133, 779), dtype=torch.float32, device="cuda") * 10
-b = torch.rand((779, 133), dtype=torch.float32, device="cuda") * 10
-ctorch = torch.matmul(a, b)
-
-ctrion = matmul_naive(a, b)
-torch.testing.assert_close(
-    ctrion, ctorch, rtol=1e-3, atol=1e-3
-)  # higher rtol because it uses tf32

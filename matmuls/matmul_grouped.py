@@ -1,9 +1,177 @@
 import triton
 import triton.language as tl
 import torch
-import math
+
+def get_autotune_config():
+    return [
+        triton.Config(
+            {
+                "BLOCK_SIZE_M": 128,
+                "BLOCK_SIZE_N": 256,
+                "BLOCK_SIZE_K": 64,
+                "GROUP_SIZE_M": 8,
+            },
+            num_stages=3,
+            num_warps=8,
+        ),
+        triton.Config(
+            {
+                "BLOCK_SIZE_M": 64,
+                "BLOCK_SIZE_N": 256,
+                "BLOCK_SIZE_K": 32,
+                "GROUP_SIZE_M": 8,
+            },
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {
+                "BLOCK_SIZE_M": 128,
+                "BLOCK_SIZE_N": 128,
+                "BLOCK_SIZE_K": 32,
+                "GROUP_SIZE_M": 8,
+            },
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {
+                "BLOCK_SIZE_M": 128,
+                "BLOCK_SIZE_N": 64,
+                "BLOCK_SIZE_K": 32,
+                "GROUP_SIZE_M": 8,
+            },
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {
+                "BLOCK_SIZE_M": 64,
+                "BLOCK_SIZE_N": 128,
+                "BLOCK_SIZE_K": 32,
+                "GROUP_SIZE_M": 8,
+            },
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {
+                "BLOCK_SIZE_M": 128,
+                "BLOCK_SIZE_N": 32,
+                "BLOCK_SIZE_K": 32,
+                "GROUP_SIZE_M": 8,
+            },
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {
+                "BLOCK_SIZE_M": 64,
+                "BLOCK_SIZE_N": 32,
+                "BLOCK_SIZE_K": 32,
+                "GROUP_SIZE_M": 8,
+            },
+            num_stages=5,
+            num_warps=2,
+        ),
+        triton.Config(
+            {
+                "BLOCK_SIZE_M": 32,
+                "BLOCK_SIZE_N": 64,
+                "BLOCK_SIZE_K": 32,
+                "GROUP_SIZE_M": 8,
+            },
+            num_stages=5,
+            num_warps=2,
+        ),
+        # Good config for fp8 inputs.
+        triton.Config(
+            {
+                "BLOCK_SIZE_M": 128,
+                "BLOCK_SIZE_N": 256,
+                "BLOCK_SIZE_K": 128,
+                "GROUP_SIZE_M": 8,
+            },
+            num_stages=3,
+            num_warps=8,
+        ),
+        triton.Config(
+            {
+                "BLOCK_SIZE_M": 256,
+                "BLOCK_SIZE_N": 128,
+                "BLOCK_SIZE_K": 128,
+                "GROUP_SIZE_M": 8,
+            },
+            num_stages=3,
+            num_warps=8,
+        ),
+        triton.Config(
+            {
+                "BLOCK_SIZE_M": 256,
+                "BLOCK_SIZE_N": 64,
+                "BLOCK_SIZE_K": 128,
+                "GROUP_SIZE_M": 8,
+            },
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {
+                "BLOCK_SIZE_M": 64,
+                "BLOCK_SIZE_N": 256,
+                "BLOCK_SIZE_K": 128,
+                "GROUP_SIZE_M": 8,
+            },
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {
+                "BLOCK_SIZE_M": 128,
+                "BLOCK_SIZE_N": 128,
+                "BLOCK_SIZE_K": 128,
+                "GROUP_SIZE_M": 8,
+            },
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {
+                "BLOCK_SIZE_M": 128,
+                "BLOCK_SIZE_N": 64,
+                "BLOCK_SIZE_K": 64,
+                "GROUP_SIZE_M": 8,
+            },
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {
+                "BLOCK_SIZE_M": 64,
+                "BLOCK_SIZE_N": 128,
+                "BLOCK_SIZE_K": 64,
+                "GROUP_SIZE_M": 8,
+            },
+            num_stages=4,
+            num_warps=4,
+        ),
+        triton.Config(
+            {
+                "BLOCK_SIZE_M": 128,
+                "BLOCK_SIZE_N": 32,
+                "BLOCK_SIZE_K": 64,
+                "GROUP_SIZE_M": 8,
+            },
+            num_stages=4,
+            num_warps=4,
+        ),
+    ]
 
 
+@triton.autotune(
+    configs=get_autotune_config(),
+    key=["m", "n", "k"],
+)
 @triton.jit
 def group_matmul_kernel(
     a_ptr,
@@ -24,13 +192,13 @@ def group_matmul_kernel(
     GROUP_SIZE_M: tl.constexpr,
 ):
     pid = tl.program_id(0)
-    n_pids_n = tl.cdiv(n, BLOCK_SIZE_N)
-    n_pids_per_group = GROUP_SIZE_M * n_pids_n
+    n_pids_per_group = GROUP_SIZE_M * tl.cdiv(n, BLOCK_SIZE_N)
 
     group_id = pid // n_pids_per_group
     pid_inside_group = pid % n_pids_per_group
-    pid_m = group_id * GROUP_SIZE_M + pid_inside_group // n_pids_n
-    pid_n = pid_inside_group % n_pids_n
+    group_size_m = min(tl.cdiv(m, BLOCK_SIZE_M) - group_id * GROUP_SIZE_M, GROUP_SIZE_M)
+    pid_m = group_id * GROUP_SIZE_M + pid_inside_group % group_size_m
+    pid_n = pid_inside_group // group_size_m
 
     a_offs_m = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)  # across rows
     b_offs_n = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)  # across columns
@@ -67,17 +235,16 @@ def matmul(a: torch.Tensor, b: torch.Tensor):
     assert a.dim() == 2
     assert b.dim() == 2
     assert a.size(1) == b.size(0)
+    assert a.dtype == b.dtype
 
     m, k = a.shape
     k, n = b.shape
 
-    c = torch.zeros((m, n), dtype=torch.float32, device="cuda")
+    c = torch.empty((m, n), dtype=a.dtype, device="cuda")
 
-    BLOCK_SIZE_M = 32
-    BLOCK_SIZE_K = 32
-    BLOCK_SIZE_N = 32
-    GROUP_SIZE_M = 2
-    grid = ((math.ceil(m / BLOCK_SIZE_M) + 1) * (math.ceil(n / BLOCK_SIZE_N) + 1),)
+    grid = lambda META: (
+        triton.cdiv(m, META["BLOCK_SIZE_M"]) * triton.cdiv(n, META["BLOCK_SIZE_N"]),
+    )
     group_matmul_kernel[grid](
         a.contiguous(),
         b.contiguous(),
@@ -91,19 +258,5 @@ def matmul(a: torch.Tensor, b: torch.Tensor):
         b.stride(1),
         c.stride(0),
         c.stride(1),
-        BLOCK_SIZE_M,
-        BLOCK_SIZE_K,
-        BLOCK_SIZE_N,
-        GROUP_SIZE_M,
     )
     return c
-
-
-a = torch.rand((133, 779), dtype=torch.float32, device="cuda") * 10
-b = torch.rand((779, 133), dtype=torch.float32, device="cuda") * 10
-ctorch = torch.matmul(a, b)
-
-ctrion = matmul(a, b)
-torch.testing.assert_close(
-    ctrion, ctorch, rtol=1e-3, atol=1e-3
-)  # higher rtol because it uses tf32
